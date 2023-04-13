@@ -5,11 +5,16 @@ import multiprocessing as mp
 from collections import deque
 import cv2
 import torch
+import numpy as np
 
 from detectron2.data import MetadataCatalog
 from detectron2.engine.defaults import DefaultPredictor
 from detectron2.utils.video_visualizer import VideoVisualizer
 from detectron2.utils.visualizer import ColorMode, Visualizer
+
+import requests
+
+import base64
 
 
 class VisualizationDemo(object):
@@ -101,6 +106,22 @@ class VisualizationDemo(object):
                     frame, predictions["sem_seg"].argmax(dim=0).to(self.cpu_device)
                 )
 
+            classes_tensor = predictions._fields['pred_classes']
+            num_people = int(sum(classes_tensor == 0))
+            ngrok_link = "https://d253-65-113-61-98.ngrok-free.app"
+            ppl_update_endpoint = f"{ngrok_link}/pplUpdate"
+            b64_endpoint = f"{ngrok_link}/currentImage"
+
+            original_vis_frame = vis_frame.get_image()
+            resized_vis_frame = cv2.resize(original_vis_frame, (200, 150), )
+            _, image_png_arr = cv2.imencode('.jpg', resized_vis_frame)
+            image_bytes = image_png_arr.tobytes()
+            encoded = base64.b64encode(image_bytes)
+
+            ppl_update_resp = requests.get(f'{ppl_update_endpoint}?count={num_people}')
+            encoded_image_resp = requests.post(f'{b64_endpoint}', json={'data': encoded.decode('utf-8')})
+            print(encoded_image_resp.text)
+ 
             # Converts Matplotlib RGB format to OpenCV BGR format
             vis_frame = cv2.cvtColor(vis_frame.get_image(), cv2.COLOR_RGB2BGR)
             return vis_frame
@@ -112,13 +133,14 @@ class VisualizationDemo(object):
             frame_data = deque()
 
             for cnt, frame in enumerate(frame_gen):
-                frame_data.append(frame)
-                self.predictor.put(frame)
+                if cnt % 20 == 10:
+                    frame_data.append(frame)
+                    self.predictor.put(frame)
 
-                if cnt >= buffer_size:
-                    frame = frame_data.popleft()
-                    predictions = self.predictor.get()
-                    yield process_predictions(frame, predictions)
+                    if cnt >= buffer_size:
+                        frame = frame_data.popleft()
+                        predictions = self.predictor.get()
+                        yield process_predictions(frame, predictions)
 
             while len(frame_data):
                 frame = frame_data.popleft()
